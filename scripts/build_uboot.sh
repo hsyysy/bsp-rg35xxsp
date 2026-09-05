@@ -64,7 +64,7 @@ echo "    CONFIG_DEFAULT_DEVICE_TREE = $ACTUAL_DT ✓"
 
 # ===== 3. build with BL31 =====
 echo "==> [3/4] make -j$(nproc) (BL31=$BL31)"
-make CROSS_COMPILE=aarch64-linux-gnu- BL31="$BL31" -j$(nproc) 2>&1 | tail -40
+make CROSS_COMPILE=aarch64-linux-gnu- BL31="$BL31" -j$(nproc)
 
 # ===== 4. 收产物 =====
 echo "==> [4/4] 收产物到 $OUT/"

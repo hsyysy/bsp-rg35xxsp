@@ -85,7 +85,7 @@ jobs:
 
       - name: Clone linux
         run: |
-          git clone --depth 1 --branch v7.0.9 \
+          git clone --depth 1 --branch v7.2.3 \
             https://github.com/gregkh/linux.git linux
 
       - name: Install toolchain & deps

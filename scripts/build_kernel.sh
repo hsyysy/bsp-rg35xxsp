@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build_kernel.sh —— 编译主线 Linux 7.0.9 + 生成 FAT 部署文件夹
+# build_kernel.sh —— 编译主线 Linux 7.2.3 + 生成 FAT 部署文件夹
 #
 # 用法:
 #   ./build_kernel.sh              # dev 模式 (默认)
@@ -8,13 +8,13 @@
 #   ./build_kernel.sh release      # release 模式
 #
 # 模式区别:
-#   dev     — linux-7.0.9, 增量编译, 适合迭代开发
-#   release — linux-7.0.9, distclean 后全量编译, 产物可复现
+#   dev     — linux-7.2.3, 增量编译, 适合迭代开发
+#   release — linux-7.2.3, distclean 后全量编译, 产物可复现
 #
 # 产物（out/）：
 #   Image.gz                                   arm64 内核
 #   sun50i-h700-anbernic-rg35xx-sp.dtb         设备树
-#   modules.tar.gz                             /lib/modules/7.0.9/ 打包
+#   modules.tar.gz                             /lib/modules/7.2.3/ 打包
 #   p2-payload/                                Image + dtb + extlinux.conf
 #
 # 内核配置:
@@ -24,7 +24,7 @@ set -euo pipefail
 
 BSP="$(cd "$(dirname "$0")/.." && pwd)"
 OUT=$BSP/out
-KVER=7.0.9
+KVER=${KVER:-7.2.3}
 
 DTB_NAME=sun50i-h700-anbernic-rg35xx-sp.dtb
 DTB_REL=allwinner/$DTB_NAME
@@ -47,25 +47,30 @@ mkdir -p "$OUT"
 
 cd "$KSRC"
 
-# ===== 0. 应用 patches =====
+# ===== 1. release 模式: distclean 确保干净 =====
+if [ "$MODE" = "release" ]; then
+    echo "==> [0/5] make distclean"
+    make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- distclean
+fi
+
+# ===== 1. 应用 v7.2.3 patches =====
 PATCH_DIR=$BSP/patches/linux
 APPLIED_MARKER=$KSRC/.patches_applied
-if [ -d "$PATCH_DIR" ] && ls "$PATCH_DIR"/*.patch >/dev/null 2>&1; then
+if [ -d "$PATCH_DIR" ] && compgen -G "$PATCH_DIR/*.patch" >/dev/null; then
     if [ ! -f "$APPLIED_MARKER" ]; then
-        echo "==> [0/6] 应用 patches"
+        echo "==> [1/5] 应用 Linux 7.2.3 patches"
         for p in "$PATCH_DIR"/*.patch; do
             echo "    applying $(basename "$p")"
-            git apply --check "$p" 2>/dev/null \
-                || { echo "!! patch 不兼容: $p"; exit 1; }
+            git apply --check "$p"
             git apply "$p"
         done
         touch "$APPLIED_MARKER"
     else
-        echo "==> [0/6] patches 已应用，跳过"
+        echo "==> [1/5] patches 已应用，跳过"
     fi
 fi
 
-# ===== 0b. 复制 rg35xxsp.config =====
+# ===== 1b. 复制 rg35xxsp.config =====
 CONFIG_SRC=$BSP/configs/rg35xxsp.config
 CONFIG_DST=$KSRC/kernel/configs/rg35xxsp.config
 if [ -f "$CONFIG_SRC" ]; then
@@ -73,41 +78,36 @@ if [ -f "$CONFIG_SRC" ]; then
     cp "$CONFIG_SRC" "$CONFIG_DST"
 fi
 
-# ===== 1. release 模式: distclean 确保干净 =====
-if [ "$MODE" = "release" ]; then
-    echo "==> [1/6] make distclean"
-    make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- distclean
-fi
-
-# ===== 2. defconfig + rg35xxsp.config =====
+# ===== 1. defconfig + rg35xxsp.config =====
 EXTRA=$KSRC/kernel/configs/rg35xxsp.config
 if [ ! -f .config ]; then
-    echo "==> [2/6] make defconfig"
+    echo "==> [1/5] make defconfig"
     make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
 fi
-# 每次构建都合并 rg35xxsp.config（幂等：olddefconfig 会忽略已存在的项）
+# 每次构建都合并 rg35xxsp.config；merge_config.sh 会替换已有符号，避免
+# 反复追加 fragment 导致 .config 膨胀和 override 警告。
 if [ -f "$EXTRA" ]; then
-    echo "==> [2/6] 应用 rg35xxsp.config:"
+    echo "==> [1/5] 应用 rg35xxsp.config:"
     grep -E "^CONFIG_" "$EXTRA" | sed 's/^/      /'
-    cat "$EXTRA" >> .config
+    "$KSRC/scripts/kconfig/merge_config.sh" -m -Q .config "$EXTRA"
     make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 fi
 
-# ===== 3. Image + dtbs + modules =====
+# ===== 2. Image + dtbs + modules =====
 # LOCALVERSION="" (empty but set):压住 setlocalversion 在 .scmversion 缺失时
 # 给 KERNELRELEASE 末尾追加的 "+"。结合 # CONFIG_LOCALVERSION_AUTO is not set
-# (rg35xxsp.config),让 kernel release 稳定为 "7.0.9",modules 路径不再带 git hash。
-echo "==> [3/6] make -j$(nproc) Image.gz dtbs modules"
+# (rg35xxsp.config),让 kernel release 稳定为 "$KVER",modules 路径不再带 git hash。
+echo "==> [2/5] make -j$(nproc) Image.gz dtbs modules"
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LOCALVERSION="" \
-    Image.gz dtbs modules -j$(nproc) 2>&1 | tail -10
+    Image.gz dtbs modules -j$(nproc)
 
 IMAGE_SRC=$KSRC/arch/arm64/boot/Image.gz
 DTB_SRC=$KSRC/arch/arm64/boot/dts/$DTB_REL
 [ -f "$IMAGE_SRC" ] || { echo "!! $IMAGE_SRC 不存在"; exit 1; }
 [ -f "$DTB_SRC" ]   || { echo "!! $DTB_SRC 不存在"; exit 1; }
 
-# ===== 4. modules → tar.gz =====
-echo "==> [4/6] make modules_install + tar.gz"
+# ===== 3. modules → tar.gz =====
+echo "==> [3/5] make modules_install + tar.gz"
 STAGING=$OUT/modules-staging
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
@@ -122,8 +122,8 @@ rm -f "$STAGING/lib/modules/$KVER/build" "$STAGING/lib/modules/$KVER/source"
 tar -C "$STAGING" -czf "$OUT/modules.tar.gz" lib
 ls -lh "$OUT/modules.tar.gz"
 
-# ===== 5. 摆 p2 FAT 内容 =====
-echo "==> [5/6] 摆 p2 部署目录"
+# ===== 4. 摆 p2 FAT 内容 =====
+echo "==> [4/5] 摆 p2 部署目录"
 P2=$OUT/p2-payload
 rm -rf "$P2"
 mkdir -p "$P2/extlinux"
@@ -157,8 +157,8 @@ if [ "$P2_USED" -gt "$P2_LIMIT" ]; then
 fi
 printf '    p2-payload 占用 %s MiB / 30 MiB 上限 ✓\n' "$P2_USED_MB"
 
-# ===== 6. 顶层留 sha256 摘要 =====
-echo "==> [6/6] 收尾"
+# ===== 5. 顶层留 sha256 摘要 =====
+echo "==> [5/5] 收尾"
 cp -v "$IMAGE_SRC" "$OUT/Image.gz"
 cp -v "$DTB_SRC"   "$OUT/$DTB_NAME"
 
