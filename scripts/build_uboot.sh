@@ -10,7 +10,7 @@
 # 输入：out/bl31.bin (来自 build_tfa.sh)
 # 输出：out/u-boot-sunxi-with-spl.bin
 #
-# 工具链：系统 aarch64-linux-gnu-gcc 15.2.0
+# 工具链：aarch64-linux-gnu-gcc
 
 set -euo pipefail
 
@@ -18,38 +18,30 @@ BSP="$(cd "$(dirname "$0")/.." && pwd)"
 UBOOT_SRC=$BSP/u-boot
 OUT=$BSP/out
 BL31=$OUT/bl31.bin
+source "$BSP/scripts/build_common.sh"
 
 DEFCONFIG_SP=anbernic_rg35xx_sp_defconfig
 DEFCONFIG_BASE=anbernic_rg35xx_h700_defconfig
 
 [ -d "$UBOOT_SRC" ] || { echo "缺 $UBOOT_SRC"; exit 1; }
-[ -f "$BL31" ]      || { echo "缺 $BL31，先跑 ./build_tfa.sh"; exit 1; }
+[ -f "$BL31" ]      || { echo "缺 $BL31，先跑 ./scripts/build_tfa.sh"; exit 1; }
 mkdir -p "$OUT"
 
 cd "$UBOOT_SRC"
 
 # ===== 1. 派生 SP defconfig（不修改 base 文件） =====
-if [ ! -f "configs/$DEFCONFIG_SP" ]; then
-    echo "==> [1/4] 派生 configs/$DEFCONFIG_SP（基于 $DEFCONFIG_BASE）"
-    sed \
-        -e 's#sun50i-h700-anbernic-rg35xx-2024#sun50i-h700-anbernic-rg35xx-sp#' \
-        "configs/$DEFCONFIG_BASE" > "configs/$DEFCONFIG_SP"
-    # 跳过 distroboot 全扫描，直接从 mmc 0:2 加载 Image.gz + dtb
-    # （p1 = Roms 2 GiB FAT，distroboot 会 hang）
-    cat >> "configs/$DEFCONFIG_SP" <<'EOF'
+# Regenerate the derived config so layout/logging changes also affect repeat builds.
+echo "==> [1/4] 派生 configs/$DEFCONFIG_SP（基于 $DEFCONFIG_BASE）"
+sed \
+    -e 's#sun50i-h700-anbernic-rg35xx-2024#sun50i-h700-anbernic-rg35xx-sp#' \
+    -e '/^CONFIG_USE_BOOTCOMMAND=/d' \
+    -e '/^CONFIG_BOOTCOMMAND=/d' \
+    "configs/$DEFCONFIG_BASE" > "configs/$DEFCONFIG_SP"
+# Direct boot avoids a distroboot scan. BOOT_PART and ROOT_DEV must match the card.
+cat >> "configs/$DEFCONFIG_SP" <<EOF
 CONFIG_USE_BOOTCOMMAND=y
-CONFIG_BOOTCOMMAND="setenv bootargs 'earlycon=uart8250,mmio32,0x05000000 console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait rw fw_devlink=off' && load mmc 0:2 ${kernel_addr_r} /Image.gz && load mmc 0:2 ${fdt_addr_r} /sun50i-h700-anbernic-rg35xx-sp.dtb && booti ${kernel_addr_r} - ${fdt_addr_r}"
+CONFIG_BOOTCOMMAND="setenv bootargs 'earlycon=uart8250,mmio32,0x05000000 console=ttyS0,115200 root=$ROOT_DEV rootwait rw fw_devlink=off $BOOT_LOG_ARGS' && load mmc $BOOT_PART \${kernel_addr_r} /Image.gz && load mmc $BOOT_PART \${fdt_addr_r} /sun50i-h700-anbernic-rg35xx-sp.dtb && booti \${kernel_addr_r} - \${fdt_addr_r}"
 EOF
-    diff -u "configs/$DEFCONFIG_BASE" "configs/$DEFCONFIG_SP" || true
-else
-    echo "==> [1/4] configs/$DEFCONFIG_SP 已存在，跳过派生"
-fi
-
-# Keep the derived defconfig quiet even if it was created by an older script.
-sed -i \
-    -e 's/ ignore_loglevel//g' \
-    -e 's/ drm\.debug=0x[0-9a-fA-F]\+//g' \
-    "configs/$DEFCONFIG_SP"
 
 # ===== 2. distclean + defconfig =====
 echo "==> [2/4] make distclean + $DEFCONFIG_SP"
@@ -79,4 +71,4 @@ ls -lh "$OUT/u-boot-sunxi-with-spl.bin"
 sha256sum "$OUT/u-boot-sunxi-with-spl.bin"
 
 echo ""
-echo "==> done。下一步：./build_kernel.sh"
+echo "==> done。下一步：./scripts/build_kernel.sh"

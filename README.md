@@ -1,67 +1,80 @@
 # bsp-rg35xxsp
 
-Anbernic RG35XX-SP 主线 Linux BSP 构建仓库。
+Anbernic RG35XX-SP（Allwinner H700）主线 Linux BSP 构建仓库。
 
-基于 mainline Linux 7.2.3 + U-Boot 2026.04 + TF-A lts-v2.14.2，通过 submodule + patch 管理。
+基于 Linux **7.2.9**、U-Boot **2026.04** 和 TF-A **lts-v2.14.2**，
+通过公开上游 submodule 与设备适配 patch 管理源码。
+
+本次同步包含 LCD/DE33 适配、RTC 开机校时、TF2 与启动告警修复，以及正常启动日志配置。
+7.2.9 已包含 LCD TCON TOP 路由修复；开发阶段已完成重启及 LCD 视觉验收。
+
+## 获取源码
+
+```bash
+git clone --recurse-submodules https://github.com/hsyysy/bsp-rg35xxsp.git
+cd bsp-rg35xxsp
+```
+
+已有克隆更新后，运行 `git submodule update --init --recursive`。
 
 ## 目录结构
 
-```
-├── linux/          # submodule: gregkh/linux v7.2.3
-├── u-boot/         # submodule: u-boot/u-boot v2026.04
-├── arm-tf-a/       # submodule: ARM-software/arm-trusted-firmware lts-v2.14.2
-├── patches/
-│   └── linux/      # 设备相关内核补丁（DTS、DRM、驱动等）
-├── configs/        # 内核 config fragment
+```text
+├── linux/          # gregkh/linux v7.2.9
+├── u-boot/         # u-boot/u-boot v2026.04
+├── arm-tf-a/       # ARM-software/arm-trusted-firmware lts-v2.14.2
+├── patches/linux/  # 相对 vanilla 7.2.9 的设备适配补丁
+├── configs/        # 内核 fragment 和启动日志参数
 ├── scripts/        # 编译脚本
-└── out/            # 构建产物（gitignore）
+└── out/            # 构建产物（忽略提交）
 ```
 
 ## 编译
 
-### 依赖
+Debian/Ubuntu 依赖（TF-A 需要 GCC 11 或更新版本）：
 
 ```bash
-# Debian/Ubuntu
-sudo apt-get install gcc-aarch64-linux-gnu bc bison flex libssl-dev libgnutls28-dev
-```
+sudo apt-get install gcc-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev \
+    libgnutls28-dev python3-dev python3-setuptools swig
 
-### 构建顺序
-
-```bash
-# 1. TF-A (BL31)
 ./scripts/build_tfa.sh
-
-# 2. U-Boot（依赖 bl31.bin）
 ./scripts/build_uboot.sh
-
-# 3. Kernel（使用 linux 子模块 v7.2.3）
-./scripts/build_kernel.sh          # dev 模式，增量编译
-./scripts/build_kernel.sh release  # release 模式，distclean 后全量编译
+./scripts/build_kernel.sh          # 增量编译
+./scripts/build_kernel.sh release  # distclean 后全量编译
 ```
 
-### 产物
+内核可独立构建；仅 U-Boot 依赖 `out/bl31.bin`。内核脚本会校验源码版本，
+应用补丁并合并配置。重复构建会检查补丁实际状态，不依赖历史标记文件。
+release 模式会清除内核构建配置；请先保存需要保留的自定义配置。
 
-构建产物在 `out/` 目录：
+默认使用双分区布局：p1 为启动分区，p2 为根分区。旧五分区卡的构建示例：
 
-| 文件 | 说明 |
-|------|------|
+```bash
+BOOT_PART=0:2 ROOT_DEV=/dev/mmcblk0p5 ./scripts/build_uboot.sh
+BOOT_PART=0:2 ROOT_DEV=/dev/mmcblk0p5 ./scripts/build_kernel.sh
+```
+
+脚本只构建 BSP；需自行准备 rootfs、固件并按实际卡布局部署。
+
+## 产物
+
+| `out/` 下文件 | 说明 |
+|---|---|
 | `bl31.bin` | TF-A BL31 |
 | `u-boot-sunxi-with-spl.bin` | U-Boot SPL + BL31 |
 | `Image.gz` | 内核镜像 |
 | `sun50i-h700-anbernic-rg35xx-sp.dtb` | 设备树 |
-| `modules.tar.gz` | 内核模块 |
-| `p2-payload/` | FAT 分区部署内容（Image + DTB + extlinux.conf） |
+| `modules.tar.gz` | 模块；在根文件系统解包，去除构建机路径软链 |
+| `p2-payload/` | 启动分区内容：Image.gz、DTB、extlinux.conf；目录名兼容旧布局 |
+| `SHA256SUMS` | 构建产物校验值 |
 
-## 补丁说明
+## 补丁与 CI
 
-| Patch | 内容 |
-|-------|------|
-| `0001-rg35xxsp-linux-7.2.3.patch` | RG35XX-SP 内核改动（DTS、DRM、驱动、配置及构建修复） |
+`patches/linux/0001-rg35xxsp-linux-7.2.9.patch` 包含相对 vanilla 的源码改动；
+配置独立维护在 `configs/`。
 
-## CI
-
-推送到 `master` 分支自动触发 GitHub Actions 构建。推送 tag 时自动创建 Release 并上传产物。
+推送到 `main` / `master` 或提交 PR 时运行 GitHub Actions 构建；
+推送 `v*` tag 时创建 Release 并上传产物。
 
 ## 许可证
 

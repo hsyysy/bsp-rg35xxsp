@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build_kernel.sh —— 编译主线 Linux 7.2.3 + 生成 FAT 部署文件夹
+# build_kernel.sh —— 编译主线 Linux 7.2.9 + 生成 FAT 部署文件夹
 #
 # 用法:
 #   ./build_kernel.sh              # dev 模式 (默认)
@@ -8,13 +8,13 @@
 #   ./build_kernel.sh release      # release 模式
 #
 # 模式区别:
-#   dev     — linux-7.2.3, 增量编译, 适合迭代开发
-#   release — linux-7.2.3, distclean 后全量编译, 产物可复现
+#   dev     — linux-7.2.9, 增量编译, 适合迭代开发
+#   release — linux-7.2.9, distclean 后全量编译
 #
 # 产物（out/）：
 #   Image.gz                                   arm64 内核
 #   sun50i-h700-anbernic-rg35xx-sp.dtb         设备树
-#   modules.tar.gz                             /lib/modules/7.2.3/ 打包
+#   modules.tar.gz                             /lib/modules/7.2.9/ 打包
 #   p2-payload/                                Image + dtb + extlinux.conf
 #
 # 内核配置:
@@ -24,7 +24,8 @@ set -euo pipefail
 
 BSP="$(cd "$(dirname "$0")/.." && pwd)"
 OUT=$BSP/out
-KVER=${KVER:-7.2.3}
+KVER=${KVER:-7.2.9}
+source "$BSP/scripts/build_common.sh"
 
 DTB_NAME=sun50i-h700-anbernic-rg35xx-sp.dtb
 DTB_REL=allwinner/$DTB_NAME
@@ -43,6 +44,12 @@ case "$MODE" in
 esac
 
 [ -d "$KSRC" ] || { echo "缺 $KSRC"; exit 1; }
+# Fail before cleaning or patching a source tree for a different kernel release.
+SOURCE_VERSION=$(make -s -C "$KSRC" ARCH=arm64 kernelversion)
+[ "$SOURCE_VERSION" = "$KVER" ] && [ "$KVER" = "7.2.9" ] || {
+    echo "内核版本不匹配: 源码=$SOURCE_VERSION，要求=7.2.9，KVER=$KVER"
+    exit 1
+}
 mkdir -p "$OUT"
 
 cd "$KSRC"
@@ -53,21 +60,17 @@ if [ "$MODE" = "release" ]; then
     make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- distclean
 fi
 
-# ===== 1. 应用 v7.2.3 patches =====
+# ===== 1. 应用 v7.2.9 patches =====
 PATCH_DIR=$BSP/patches/linux
-APPLIED_MARKER=$KSRC/.patches_applied
-if [ -d "$PATCH_DIR" ] && compgen -G "$PATCH_DIR/*.patch" >/dev/null; then
-    if [ ! -f "$APPLIED_MARKER" ]; then
-        echo "==> [1/5] 应用 Linux 7.2.3 patches"
-        for p in "$PATCH_DIR"/*.patch; do
-            echo "    applying $(basename "$p")"
-            git apply --check "$p"
-            git apply "$p"
-        done
-        touch "$APPLIED_MARKER"
-    else
-        echo "==> [1/5] patches 已应用，跳过"
-    fi
+# Check the actual source state, so resetting sources cannot leave a stale marker.
+PATCH=$PATCH_DIR/0001-rg35xxsp-linux-7.2.9.patch
+[ -f "$PATCH" ] || { echo "缺 $PATCH"; exit 1; }
+if git apply --reverse --check "$PATCH" 2>/dev/null; then
+    echo "==> [1/5] patches 已应用，跳过"
+else
+    echo "==> [1/5] 应用 Linux $KVER patches"
+    git apply --check "$PATCH"
+    git apply "$PATCH"
 fi
 
 # ===== 1b. 复制 rg35xxsp.config =====
@@ -122,8 +125,8 @@ rm -f "$STAGING/lib/modules/$KVER/build" "$STAGING/lib/modules/$KVER/source"
 tar -C "$STAGING" -czf "$OUT/modules.tar.gz" lib
 ls -lh "$OUT/modules.tar.gz"
 
-# ===== 4. 摆 p2 FAT 内容 =====
-echo "==> [4/5] 摆 p2 部署目录"
+# ===== 4. 摆 FAT 启动分区内容 =====
+echo "==> [4/5] 生成启动分区部署目录"
 P2=$OUT/p2-payload
 rm -rf "$P2"
 mkdir -p "$P2/extlinux"
@@ -132,7 +135,7 @@ cp -v "$IMAGE_SRC" "$P2/Image.gz"
 cp -v "$DTB_SRC"   "$P2/$DTB_NAME"
 
 cat > "$P2/extlinux/extlinux.conf" <<EOF
-# RG35XX-SP 一期 mainline boot：仅串口登录
+# RG35XX-SP mainline boot
 default sp
 prompt 0
 timeout 1
@@ -140,7 +143,7 @@ timeout 1
 label sp
     kernel /Image.gz
     fdt /$DTB_NAME
-    append earlycon=uart8250,mmio32,0x05000000 console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait rw
+    append earlycon=uart8250,mmio32,0x05000000 console=ttyS0,115200 root=$ROOT_DEV rootwait rw fw_devlink=off $BOOT_LOG_ARGS
 EOF
 
 cat "$P2/extlinux/extlinux.conf"
@@ -150,7 +153,7 @@ P2_USED=$(du -sb "$P2" | awk '{print $1}')
 P2_LIMIT=$((30 * 1024 * 1024))
 P2_USED_MB=$((P2_USED / 1024 / 1024))
 if [ "$P2_USED" -gt "$P2_LIMIT" ]; then
-    echo "!! p2-payload 总占用 ${P2_USED_MB} MiB > 30 MiB 上限（p2 FAT16 = 32 MiB）"
+    echo "!! p2-payload 总占用 ${P2_USED_MB} MiB > 30 MiB 上限（兼容 32 MiB 启动分区）"
     echo "   明细："
     du -h --max-depth=2 "$P2"
     exit 1
@@ -167,4 +170,4 @@ cp -v "$DTB_SRC"   "$OUT/$DTB_NAME"
 cat "$OUT/SHA256SUMS"
 
 echo ""
-echo "==> done ($MODE 模式)。下一步：sudo ./flash_sd.sh 或 ./deploy_ssh.sh"
+echo "==> done ($MODE 模式)。将 p2-payload/ 内容部署到启动分区，并安装 modules.tar.gz。"

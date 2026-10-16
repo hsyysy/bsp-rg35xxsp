@@ -5,7 +5,7 @@
 # 产物：out/bl31.bin (~30 KiB)
 #   用途：被 build_uboot.sh 引用打包进 u-boot-sunxi-with-spl.bin
 #
-# 工具链：系统 aarch64-linux-gnu-gcc 15.2.0（满足 TF-A v2.14 LTS 要求 GCC 11+）
+# 工具链：aarch64-linux-gnu-gcc（满足 TF-A v2.14 LTS 要求 GCC 11+）
 
 set -euo pipefail
 
@@ -35,4 +35,4 @@ sha256sum "$OUT/bl31.bin"
 
 echo ""
 echo "==> done: $OUT/bl31.bin"
-echo "    下一步：./build_uboot.sh"
+echo "    下一步：./scripts/build_uboot.sh"

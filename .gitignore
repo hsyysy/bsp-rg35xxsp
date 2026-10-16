@@ -1,2 +1,10 @@
 out/
 linux/.patches_applied
+
+# Private development environments and credentials
+.agents/
+.codex/
+.claude/
+.aws/
+.env
+.env.*

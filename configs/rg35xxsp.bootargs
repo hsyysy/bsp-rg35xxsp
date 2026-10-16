@@ -1,0 +1,2 @@
+# Normal boot: preserve standard boot messages and warnings.
+drm.debug=0

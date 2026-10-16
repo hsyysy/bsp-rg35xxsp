@@ -61,7 +61,7 @@ jobs:
           path: out/
 
       - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu libgnutls28-dev
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu bc bison flex libssl-dev libgnutls28-dev python3-dev python3-setuptools swig
 
       - name: Build U-Boot
         run: ./scripts/build_uboot.sh
@@ -85,20 +85,20 @@ jobs:
 
       - name: Clone linux
         run: |
-          git clone --depth 1 --branch v7.2.3 \
+          git clone --depth 1 --branch v7.2.9 \
             https://github.com/gregkh/linux.git linux
 
       - name: Install toolchain & deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            gcc-aarch64-linux-gnu bc bison flex libssl-dev
+            gcc-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev
 
       - name: Restore ccache
         uses: actions/cache@v4
         with:
           path: /tmp/ccache
-          key: kernel-ccache-${{ hashFiles('configs/rg35xxsp.config') }}
+          key: kernel-7.2.9-ccache-${{ hashFiles('configs/rg35xxsp.config', 'patches/linux/*.patch') }}
           restore-keys: kernel-ccache-
 
       - name: Setup ccache
@@ -122,6 +122,8 @@ jobs:
   # 汇总所有产物 + SHA256
   # ──────────────────────────────────────────────
   collect:
+    permissions:
+      contents: write
     needs: [build-tfa, build-uboot, build-kernel]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
@@ -136,7 +138,7 @@ jobs:
       - name: Generate SHA256SUMS
         run: |
           cd out
-          find . -type f -name '*.bin' -o -name '*.gz' -o -name '*.dtb' \
+          find . -type f \( -name '*.bin' -o -name '*.gz' -o -name '*.dtb' \) \
             | sort | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
 

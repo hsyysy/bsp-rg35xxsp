@@ -1,50 +1,3 @@
-diff --git a/.gitignore b/.gitignore
-index 9875120..525ee7b 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -194,3 +194,42 @@ sphinx_*/
- 
- # bc language scripts (not LLVM bitcode)
- !kernel/time/timeconst.bc
-+
-+# Additional build-time temp artifacts
-+.checked-*
-+.missing-syscalls.d
-+.tmp_vmlinux*
-+.tmp_initcalls.lds
-+.tmp_symversions.lds
-+.scmversion
-+.vmlinux.export.c
-+vmlinux.unstripped
-+
-+# DTS overlay build artifacts
-+arch/*/boot/dts/**/*.dtbo
-+arch/*/boot/dts/**/dtbs-list
-+arch/*/boot/dts/**/.*.dtbo.d.dtc.tmp
-+arch/*/boot/dts/**/.*.dtbo.d.pre.tmp
-+arch/*/boot/dts/**/.*.dtbo.dts.tmp
-+
-+# DTC temp files (dtb build)
-+drivers/of/empty_root.dtb
-+drivers/of/empty_root.dtb.S
-+drivers/of/.empty_root.dtb.*
-+
-+# Crypto ASN.1 generated sources
-+crypto/*.asn1.[ch]
-+crypto/asymmetric_keys/*.asn1.[ch]
-+certs/signing_key.*
-+
-+# Kernel config/initramfs data
-+kernel/config_data*
-+usr/.initramfs_data.cpio.d
-+
-+# Kconfig generated parser/lexer
-+scripts/kconfig/lexer.lex.c
-+scripts/kconfig/parser.tab.[ch]
-+
-+# arm64 vDSO build outputs
-+arch/arm64/kernel/vdso/vdso.so
-+arch/arm64/kernel/vdso/vdso.so.dbg
 diff --git a/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi b/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi
 index 1598e86..70e3047 100644
 --- a/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi
@@ -539,13 +492,25 @@ index 1a750c5..b4db50a 100644
 +	remote-endpoint = <&panel_in_rgb>;
 +};
 diff --git a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-sp.dts b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-sp.dts
-index 0cf16dc..9cc6e8c 100644
+index 0cf16dc..c9aeaad 100644
 --- a/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-sp.dts
 +++ b/arch/arm64/boot/dts/allwinner/sun50i-h700-anbernic-rg35xx-sp.dts
-@@ -11,6 +11,11 @@ / {
+@@ -11,6 +11,23 @@ / {
  	model = "Anbernic RG35XX SP";
  	compatible = "anbernic,rg35xx-sp", "allwinner,sun50i-h700";
  
++	/*
++	 * RTC 编号必须显式固定(2026-09-05 实测,见 issues.md P2-6)。
++	 * sun6i-rtc 无电池,掉电停走 — 开机实测取到 4 天前的时间戳;
++	 * PCF8563 有纽扣电池,掉电继续走。内核的
++	 * CONFIG_RTC_{HCTOSYS,SYSTOHC}_DEVICE 都是 "rtc0",所以必须让
++	 * PCF8563 成为 rtc0,否则开机时间来自会停走的那块。
++	 *
++	 * 两个节点都要给 alias:drivers/rtc/class.c:rtc_device_get_id() 先试
++	 * of_alias_get_id(),失败才 ida_alloc()。sun6i 是 platform driver,
++	 * 比 i2c client 先 probe;若只给 PCF8563 alias,sun6i 会先 ida_alloc()
++	 * 抢到 id 0,PCF8563 的 ida_alloc_range(0,0) 撞车后回退到 id 1。
++	 */
 +	aliases {
 +		rtc0 = &rtc_ext;	/* PCF8563 @ r_i2c 0x51,电池保持 */
 +		rtc1 = &rtc;		/* sun6i-rtc,掉电丢失 */
@@ -554,7 +519,7 @@ index 0cf16dc..9cc6e8c 100644
  	gpio-keys-lid {
  		compatible = "gpio-keys";
  
-@@ -24,6 +29,25 @@ lid-switch {
+@@ -24,6 +41,25 @@ lid-switch {
  			wakeup-source;
  		};
  	};
@@ -580,7 +545,7 @@ index 0cf16dc..9cc6e8c 100644
  };
  
  &r_i2c {
-@@ -32,3 +56,47 @@ rtc_ext: rtc@51 {
+@@ -32,3 +68,48 @@ rtc_ext: rtc@51 {
  		reg = <0x51>;
  	};
  };
@@ -623,6 +588,7 @@ index 0cf16dc..9cc6e8c 100644
 +	vmmc-supply = <&reg_tf2_vdd>;
 +	vqmmc-supply = <&reg_cldo2>;	/* 3.3V, unused on this board */
 +	cd-gpios = <&pio 4 22 GPIO_ACTIVE_LOW>; /* PE22 */
++	disable-wp;
 +	bus-width = <4>;
 +	no-sdio;
 +	no-mmc;
@@ -713,13 +679,21 @@ index a6cd0f9..11c0192 100644
  
  	ret = devm_sunxi_ccu_probe(&pdev->dev, reg, ccu_desc);
 diff --git a/drivers/gpu/drm/panel/panel-newvision-nv3052c.c b/drivers/gpu/drm/panel/panel-newvision-nv3052c.c
-index 18130bc..eba22cd 100644
+index 18130bc..1810149 100644
 --- a/drivers/gpu/drm/panel/panel-newvision-nv3052c.c
 +++ b/drivers/gpu/drm/panel/panel-newvision-nv3052c.c
-@@ -619,6 +619,21 @@ static const struct drm_display_mode wl_355608_a8_mode[] = {
+@@ -619,6 +619,29 @@ static const struct drm_display_mode wl_355608_a8_mode[] = {
  	},
  };
  
++/*
++ * Anbernic RG35XX-SP timing: extracted from vendor BSP DTB
++ * (p4 Android boot image, lcd_type=old / dtb 0), 2026-05-22.
++ * Differs from wl_355608_a8 (RG35XX-Plus 2024 mainline): htotal 720 vs 770,
++ * vtotal 560 vs 520. Same NV3052C controller, same WL-355608-A8 panel module,
++ * different SoC tuning. Reuses wl_355608_a8_panel_regs[] init sequence
++ * (vendor SPI byte sequence not yet recovered).
++ */
 +static const struct drm_display_mode fog_fj035fhd05_v1_mode[] = {
 +	{
 +		.clock = 24000,
@@ -738,7 +712,7 @@ index 18130bc..eba22cd 100644
  static const struct nv3052c_panel_info ltk035c5444t_panel_info = {
  	.display_modes = ltk035c5444t_modes,
  	.num_modes = ARRAY_SIZE(ltk035c5444t_modes),
-@@ -652,10 +667,22 @@ static const struct nv3052c_panel_info wl_355608_a8_panel_info = {
+@@ -652,10 +675,22 @@ static const struct nv3052c_panel_info wl_355608_a8_panel_info = {
  	.panel_regs_len = ARRAY_SIZE(wl_355608_a8_panel_regs),
  };
  
@@ -761,7 +735,7 @@ index 18130bc..eba22cd 100644
  	{ /* sentinel */ }
  };
  MODULE_DEVICE_TABLE(spi, nv3052c_ids);
-@@ -664,6 +691,7 @@ static const struct of_device_id nv3052c_of_match[] = {
+@@ -664,6 +699,7 @@ static const struct of_device_id nv3052c_of_match[] = {
  	{ .compatible = "leadtek,ltk035c5444t", .data = &ltk035c5444t_panel_info },
  	{ .compatible = "fascontek,fs035vg158", .data = &fs035vg158_panel_info },
  	{ .compatible = "anbernic,rg35xx-plus-panel", .data = &wl_355608_a8_panel_info },
@@ -801,10 +775,10 @@ index bad7497..501e3d8 100644
  sun4i-tcon-y			+= sun4i_crtc.o
  sun4i-tcon-y			+= sun4i_tcon_dclk.o
 diff --git a/drivers/gpu/drm/sun4i/sun4i_drv.c b/drivers/gpu/drm/sun4i/sun4i_drv.c
-index 8a409ee..537303b 100644
+index e9baca3..0c94d5d 100644
 --- a/drivers/gpu/drm/sun4i/sun4i_drv.c
 +++ b/drivers/gpu/drm/sun4i/sun4i_drv.c
-@@ -90,10 +90,9 @@ static int sun4i_drv_bind(struct device *dev)
+@@ -90,7 +90,7 @@ static int sun4i_drv_bind(struct device *dev)
  
  	ret = component_bind_all(drm->dev, drm);
  	if (ret) {
@@ -812,31 +786,8 @@ index 8a409ee..537303b 100644
 +		dev_err(drm->dev, "Couldn't bind all pipelines components: %d\n", ret);
  		goto cleanup_mode_config;
  	}
--
- 	/* drm_vblank_init calls kcalloc, which can fail */
- 	ret = drm_vblank_init(drm, drm->mode_config.num_crtc);
- 	if (ret)
-@@ -306,15 +305,17 @@ static int sun4i_drv_add_endpoints(struct device *dev,
- 	 * Otherwise, we obviously want to add it to the list.
- 	 */
- 	if (!sun4i_drv_node_is_frontend(node) &&
--	    !of_device_is_available(node))
-+	    !of_device_is_available(node)) {
- 		return 0;
-+	}
  
- 	/*
- 	 * The connectors will be the last nodes in our pipeline, we
- 	 * can just bail out.
- 	 */
--	if (sun4i_drv_node_is_connector(node))
-+	if (sun4i_drv_node_is_connector(node)) {
- 		return 0;
-+	}
- 
- 	/*
- 	 * If the device is either just a regular device, or an
-@@ -437,6 +438,7 @@ static const struct of_device_id sun4i_drv_of_table[] = {
+@@ -440,6 +440,7 @@ static const struct of_device_id sun4i_drv_of_table[] = {
  	{ .compatible = "allwinner,sun20i-d1-display-engine" },
  	{ .compatible = "allwinner,sun50i-a64-display-engine" },
  	{ .compatible = "allwinner,sun50i-h6-display-engine" },
@@ -845,7 +796,7 @@ index 8a409ee..537303b 100644
  };
  MODULE_DEVICE_TABLE(of, sun4i_drv_of_table);
 diff --git a/drivers/gpu/drm/sun4i/sun4i_tcon.c b/drivers/gpu/drm/sun4i/sun4i_tcon.c
-index 960e83c..6d19238 100644
+index 67047e3..f7ad48d 100644
 --- a/drivers/gpu/drm/sun4i/sun4i_tcon.c
 +++ b/drivers/gpu/drm/sun4i/sun4i_tcon.c
 @@ -454,7 +454,10 @@ static void sun4i_tcon0_mode_set_lvds(struct sun4i_tcon *tcon,
@@ -872,7 +823,7 @@ index 960e83c..6d19238 100644
  	DRM_DEBUG_DRIVER("Setting horizontal total %d, backporch %d\n",
  			 mode->crtc_htotal, bp);
  
-@@ -1514,6 +1520,15 @@ static const struct sun4i_tcon_quirks sun8i_a83t_tv_quirks = {
+@@ -1516,6 +1522,15 @@ static const struct sun4i_tcon_quirks sun8i_a83t_tv_quirks = {
  	.has_channel_1		= true,
  };
  
@@ -888,7 +839,7 @@ index 960e83c..6d19238 100644
  static const struct sun4i_tcon_quirks sun8i_r40_tv_quirks = {
  	.has_channel_1		= true,
  	.polarity_in_ch0	= true,
-@@ -1555,6 +1570,7 @@ const struct of_device_id sun4i_tcon_of_table[] = {
+@@ -1557,6 +1572,7 @@ const struct of_device_id sun4i_tcon_of_table[] = {
  	{ .compatible = "allwinner,sun8i-a33-tcon", .data = &sun8i_a33_quirks },
  	{ .compatible = "allwinner,sun8i-a83t-tcon-lcd", .data = &sun8i_a83t_lcd_quirks },
  	{ .compatible = "allwinner,sun8i-a83t-tcon-tv", .data = &sun8i_a83t_tv_quirks },
@@ -910,10 +861,10 @@ index fa23aa2..3eeee5a 100644
  	/* callback to handle tcon muxing options */
 diff --git a/drivers/gpu/drm/sun4i/sun50i_planes.c b/drivers/gpu/drm/sun4i/sun50i_planes.c
 new file mode 100644
-index 0000000..4a6364e
+index 0000000..f758564
 --- /dev/null
 +++ b/drivers/gpu/drm/sun4i/sun50i_planes.c
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,208 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/* Copyright (c) 2025 Jernej Skrabec <jernej.skrabec@gmail.com> */
 +
@@ -1114,6 +1065,14 @@ index 0000000..4a6364e
 +		.of_match_table	= sun50i_planes_of_table,
 +	},
 +};
++/*
++ * NOTE: not registered standalone via module_platform_driver() — depmod would
++ * detect a sun8i_mixer <-> sun50i_planes cycle (mixer calls planes_setup,
++ * planes calls sun8i_(vi|ui)_layer_init_one). Instead, sun50i_planes is
++ * compiled into sun8i-mixer.ko (Makefile sun8i-mixer-y += sun50i_planes.o)
++ * and its platform_driver is registered together by sun8i_mixer's module init.
++ * This keeps the mixer and planes driver in a single module.
++ */
 diff --git a/drivers/gpu/drm/sun4i/sun50i_planes.h b/drivers/gpu/drm/sun4i/sun50i_planes.h
 new file mode 100644
 index 0000000..446feae
@@ -1164,7 +1123,7 @@ index 0000000..446feae
 +
 +#endif /* _SUN50I_PLANES_H_ */
 diff --git a/drivers/gpu/drm/sun4i/sun8i_mixer.c b/drivers/gpu/drm/sun4i/sun8i_mixer.c
-index 4e42262..0063f55 100644
+index b6cd735..a950088 100644
 --- a/drivers/gpu/drm/sun4i/sun8i_mixer.c
 +++ b/drivers/gpu/drm/sun4i/sun8i_mixer.c
 @@ -13,6 +13,7 @@
@@ -1617,6 +1576,21 @@ index 09f668c..92dd5a9 100644
  	return layer;
  }
 +EXPORT_SYMBOL_GPL(sun8i_vi_layer_init_one);
+diff --git a/drivers/mfd/mfd-core.c b/drivers/mfd/mfd-core.c
+index 7aa32b9..1b9e10b 100644
+--- a/drivers/mfd/mfd-core.c
++++ b/drivers/mfd/mfd-core.c
+@@ -180,7 +180,9 @@ static int mfd_add_device(struct device *parent, int id,
+ 
+ 	pdev->dev.parent = parent;
+ 	pdev->dev.type = &mfd_dev_type;
+-	pdev->dev.dma_mask = parent->dma_mask;
++	/* Keep the platform default when the parent has no DMA mask. */
++	if (parent->dma_mask)
++		pdev->dev.dma_mask = parent->dma_mask;
+ 	pdev->dev.dma_parms = parent->dma_parms;
+ 	pdev->dev.coherent_dma_mask = parent->coherent_dma_mask;
+ 
 diff --git a/drivers/mmc/core/pwrseq_simple.c b/drivers/mmc/core/pwrseq_simple.c
 index 4b47e6c..930fc82 100644
 --- a/drivers/mmc/core/pwrseq_simple.c
@@ -1669,11 +1643,61 @@ index e2fbf8c..314b96b 100644
  
  			phy->vbus = NULL;
  		}
+diff --git a/drivers/pinctrl/sunxi/pinctrl-sunxi.c b/drivers/pinctrl/sunxi/pinctrl-sunxi.c
+index 31cd142..7009905 100644
+--- a/drivers/pinctrl/sunxi/pinctrl-sunxi.c
++++ b/drivers/pinctrl/sunxi/pinctrl-sunxi.c
+@@ -985,7 +985,7 @@ static int sunxi_pinctrl_gpio_get_direction(struct gpio_chip *chip,
+ {
+ 	struct sunxi_pinctrl *pctl = gpiochip_get_data(chip);
+ 	const struct sunxi_desc_function *func;
+-	u32 pin = offset + chip->base;
++	u32 pin = offset + pctl->desc->pin_base;
+ 	u32 reg, shift, mask;
+ 	u8 muxval;
+ 
+@@ -1010,7 +1010,7 @@ static int sunxi_pinctrl_gpio_direction_input(struct gpio_chip *chip,
+ 	struct sunxi_pinctrl *pctl = gpiochip_get_data(chip);
+ 
+ 	return sunxi_pmx_gpio_set_direction(pctl->pctl_dev, NULL,
+-					    chip->base + offset, true);
++					    pctl->desc->pin_base + offset, true);
+ }
+ 
+ static int sunxi_pinctrl_gpio_get(struct gpio_chip *chip, unsigned offset)
+@@ -1018,7 +1018,7 @@ static int sunxi_pinctrl_gpio_get(struct gpio_chip *chip, unsigned offset)
+ 	struct sunxi_pinctrl *pctl = gpiochip_get_data(chip);
+ 	bool set_mux = pctl->desc->irq_read_needs_mux &&
+ 		gpiochip_line_is_irq(chip, offset);
+-	u32 pin = offset + chip->base;
++	u32 pin = offset + pctl->desc->pin_base;
+ 	u32 reg, shift, mask, val;
+ 
+ 	sunxi_data_reg(pctl, offset, &reg, &shift, &mask);
+@@ -1074,7 +1074,7 @@ static int sunxi_pinctrl_gpio_direction_output(struct gpio_chip *chip,
+ 
+ 	sunxi_pinctrl_gpio_set(chip, offset, value);
+ 	return sunxi_pmx_gpio_set_direction(pctl->pctl_dev, NULL,
+-					    chip->base + offset, false);
++					    pctl->desc->pin_base + offset, false);
+ }
+ 
+ static int sunxi_pinctrl_gpio_of_xlate(struct gpio_chip *gc,
+@@ -1742,7 +1742,8 @@ int sunxi_pinctrl_init_with_flags(struct platform_device *pdev,
+ 			    pctl->desc->pin_base;
+ 	pctl->chip->label = dev_name(&pdev->dev);
+ 	pctl->chip->parent = &pdev->dev;
+-	pctl->chip->base = pctl->desc->pin_base;
++	/* Hardware pin numbers are independent of the global GPIO namespace. */
++	pctl->chip->base = -1;
+ 
+ 	ret = gpiochip_add_data(pctl->chip, pctl);
+ 	if (ret)
 diff --git a/drivers/staging/media/sunxi/cedrus/cedrus.c b/drivers/staging/media/sunxi/cedrus/cedrus.c
-index bbd186b..dd6ee5e 100644
+index 96acd52..40415fd 100644
 --- a/drivers/staging/media/sunxi/cedrus/cedrus.c
 +++ b/drivers/staging/media/sunxi/cedrus/cedrus.c
-@@ -651,6 +651,15 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
+@@ -653,6 +653,15 @@ static const struct cedrus_variant sun50i_h6_cedrus_variant = {
  	.mod_rate	= 600000000,
  };
  
@@ -1689,7 +1713,7 @@ index bbd186b..dd6ee5e 100644
  static const struct of_device_id cedrus_dt_match[] = {
  	{
  		.compatible = "allwinner,sun4i-a10-video-engine",
-@@ -696,6 +705,10 @@ static const struct of_device_id cedrus_dt_match[] = {
+@@ -698,6 +707,10 @@ static const struct of_device_id cedrus_dt_match[] = {
  		.compatible = "allwinner,sun50i-h6-video-engine",
  		.data = &sun50i_h6_cedrus_variant,
  	},
@@ -1700,95 +1724,3 @@ index bbd186b..dd6ee5e 100644
  	{ /* sentinel */ }
  };
  MODULE_DEVICE_TABLE(of, cedrus_dt_match);
-diff --git a/kernel/configs/rg35xxsp.config b/kernel/configs/rg35xxsp.config
-new file mode 100644
-index 0000000..20da5a9
---- /dev/null
-+++ b/kernel/configs/rg35xxsp.config
-@@ -0,0 +1,86 @@
-+# === AXP20X (mainline 对应 AXP717) 子驱动 ===
-+CONFIG_AXP20X_POWER=m            # USB power supply
-+CONFIG_AXP20X_ADC=m              # 内部 ADC(电池电压/温度)
-+CONFIG_BATTERY_AXP20X=m          # 电池 SOC
-+CONFIG_INPUT_AXP20X_PEK=m        # 电源键 KEY_POWER
-+
-+# === Audio ===
-+CONFIG_SND_SUN4I_CODEC=m         # H616/H700 audio machine + platform driver
-+
-+# === WiFi: Realtek RTL8821CS (SDIO) ===
-+# 设备实测:mmc1: new high speed SDIO card at address 0001 ✓
-+# 但 mainline RTW88_8821CS 默认 defconfig 未启用
-+CONFIG_RTW88=m
-+CONFIG_RTW88_CORE=m
-+CONFIG_RTW88_SDIO=m
-+CONFIG_RTW88_8821C=m
-+CONFIG_RTW88_8821CS=m
-+
-+# === Bluetooth: 显式弃用(2026-05-21 决策)===
-+CONFIG_BT=n
-+# 下列条目跟着 BT=n 自动 disable,留作显式注释方便回查
-+# CONFIG_BT_HCIUART
-+# CONFIG_BT_HCIUART_H4
-+# CONFIG_BT_HCIUART_3WIRE
-+# CONFIG_BT_HCIUART_RTL
-+# CONFIG_BT_RTL
-+# CONFIG_BT_BNEP
-+
-+# === cpufreq autoload(改 builtin,避免 udev 不触发)===
-+CONFIG_ARM_ALLWINNER_SUN50I_CPUFREQ_NVMEM=y
-+
-+# === IOMMU(P0-4 panfrost defer probe -110)===
-+CONFIG_SUN50I_IOMMU=y
-+
-+# === H616 PRCM PPU(P0-4 panfrost defer probe -110 第二根因)===
-+CONFIG_SUN50I_H6_PRCM_PPU=y
-+
-+# === Panel / LCD(P0-3,方案 A:LCD-only + GPIO 背光)===
-+CONFIG_DRM_PANEL_NEWVISION_NV3052C=m
-+CONFIG_SPI_GPIO=m
-+CONFIG_BACKLIGHT_GPIO=m
-+
-+# === DRM debug(排查 P0-3 屏黑 component bind 问题)===
-+CONFIG_DRM_DEBUG=y
-+CONFIG_DRM_DEBUG_DRIVER=y
-+
-+# === TF2 卡槽 exFAT(P1-20:第二 SD 卡常用 exFAT 格式)===
-+CONFIG_EXFAT_FS=y
-+
-+# === binfmt_misc(P1-5:模拟器需要 /proc/sys/fs/binfmt_misc)===
-+CONFIG_BINFMT_MISC=y
-+
-+# === SO_PASSSEC(P1-6:systemd socket 报 SO_PASSSEC failed)===
-+CONFIG_SECURITY_NETWORK=y
-+
-+# === RTC: 外置 PCF8563 必须 builtin(P2-6 二次修复,2026-09-05 实测)===
-+# defconfig 给的是 =m。i2c client 要等模块加载,实测 dmesg 到 [11.56s] 才
-+# `rtc-pcf8563 0-0051: registered as rtc1` —— 而 sun6i-rtc 是 builtin platform
-+# driver,[0.96s] 就 probe 完并通过 ida_alloc() 抢到 id 0。
-+# 关键:rtc_hctosys() 不是 initcall,而是在 class.c:433 的
-+# __devm_rtc_register_device() 里按名字匹配触发:
-+#     if (!strcmp(dev_name(&rtc->dev), CONFIG_RTC_HCTOSYS_DEVICE))
-+# PCF8563 注册成 rtc1 就永远匹配不上 "rtc0",开机时间只能取自无电池的
-+# sun6i-rtc(掉电停走,实测开机拿到 4 天前的值)。
-+# 编号由 sp.dts 的 aliases 钉死;这里改 builtin 是为了让 hctosys 发生在
-+# [~1s] 而不是 [~11.5s] —— 否则 systemd 头 11 秒都在用错误时钟跑。
-+# 前置条件已满足:CONFIG_I2C=y + CONFIG_I2C_MV64XXX=y(r_i2c 控制器 builtin)。
-+CONFIG_RTC_DRV_PCF8563=y
-+
-+# === CMA 加大至 64 MiB(cedrus VPU 解码帧需要 + GPU 共享)====
-+CONFIG_CMA_SIZE_MBYTES=64
-+
-+# === DMA-buf heaps(cedrus V4L2-request 硬解必需)===
-+CONFIG_DMABUF_HEAPS=y
-+CONFIG_DMABUF_HEAPS_CMA=y
-+CONFIG_DMABUF_HEAPS_SYSTEM=y
-+
-+# === Cedrus VPU (Allwinner H616 V4L2 硬解驱动)===
-+CONFIG_MEDIA_SUPPORT=y
-+CONFIG_MEDIA_PLATFORM_SUPPORT=y
-+CONFIG_V4L2_MEM2MEM_DRIVERS=y
-+CONFIG_VIDEO_SUNXI=y
-+CONFIG_VIDEO_SUNXI_CEDRUS=m
-+
-+# Keep the kernel release equal to 7.2.3 by disabling automatic SCM suffixes.
-+# CONFIG_LOCALVERSION_AUTO is not set
